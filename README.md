@@ -2,7 +2,8 @@
 
 Self-contained builds of the [Hermes Agent](https://github.com/NousResearch/hermes-agent) CLI for ACP clients,
 one per [ACP registry](https://github.com/agentclientprotocol/registry) target, from each Hermes release.
-Nothing needs to be installed first: each archive carries its own Python, Node, uv, ripgrep, git and ffmpeg.
+Nothing needs to be installed first: each archive carries its own Python, uv, Node, npm, pnpm, ripgrep and
+ffmpeg. git is bundled on Windows; on Linux and macOS Hermes uses the system's git, by its own choice.
 
 **Unofficial.** Nous Research does not publish or support these builds. This repo stands in until Hermes ships
 binaries of its own, and steps aside when it does.

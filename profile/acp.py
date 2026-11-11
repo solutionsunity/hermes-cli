@@ -1,10 +1,10 @@
 """Narrows Hermes' native payload to the ACP profile, in a hermes-agent checkout.
 
 The profile is what `hermes acp` needs: the agent core with the acp and mcp
-extras, the tools its agent work runs (Python, uv, Node, npm, ripgrep, git,
-ffmpeg), and no offline uv cache. Each edit is anchored on the line it
-replaces and must match exactly once, so a Hermes release that moves one of
-them fails the build here instead of shipping a different payload.
+extras, the tools Hermes requires (uv, Node, npm, pnpm, ripgrep, ffmpeg) plus
+the Python it runs on and git, and no offline uv cache. Each edit is anchored
+on the line it replaces and must match exactly once, so a Hermes release that
+moves one of them fails the build here instead of shipping a different payload.
 
 Usage: python profile/acp.py <hermes-agent checkout>
 """
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 EXTRAS = ("acp", "mcp")
-TOOLS = ("python", "uv", "node", "npm", "ripgrep", "git", "ffmpeg")
+TOOLS = ("python", "uv", "node", "npm", "pnpm", "ripgrep", "git", "ffmpeg")
 
 EDITS = (
     # The tool selection keeps only the profile's tools.
