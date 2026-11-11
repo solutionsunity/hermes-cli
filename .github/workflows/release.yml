@@ -45,11 +45,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT: ${{ inputs.tag }}
+          PUBLISH: ${{ github.event_name == 'schedule' || inputs.publish }}
         run: |
           tag=${INPUT:-$(gh api repos/NousResearch/hermes-agent/releases/latest --jq .tag_name)}
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::not a release tag: $tag"; exit 1; }
           build=true why="not released here yet"
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if [ "$PUBLISH" = false ]; then
+            why="checking it, not publishing"
+          elif gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             build=false why="released here already"
           elif [ "$GITHUB_EVENT_NAME" = schedule ] && [ -n "$(gh issue list --repo "$GITHUB_REPOSITORY" \
               --state open --search "\"Build failed: Hermes $tag\" in:title" --json number --jq '.[].number')" ]; then
@@ -266,7 +269,7 @@ jobs:
 
   report:
     needs: [resolve, build, release]
-    if: failure() && needs.resolve.outputs.tag != ''
+    if: failure() && needs.resolve.outputs.tag != '' && (github.event_name == 'schedule' || inputs.publish)
     runs-on: ubuntu-24.04
     permissions:
       issues: write
