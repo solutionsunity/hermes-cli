@@ -1,33 +1,38 @@
-# hermes-agent-bin
+# hermes-cli
 
-Builds the standalone [Hermes Agent](https://github.com/NousResearch/hermes-agent) CLI payload for six targets
-from a Hermes release tag, on GitHub-hosted runners only.
+Self-contained builds of the [Hermes Agent](https://github.com/NousResearch/hermes-agent) CLI for ACP clients,
+one per [ACP registry](https://github.com/agentclientprotocol/registry) target, from each Hermes release.
+Nothing needs to be installed first: each archive carries its own Python, Node, uv, ripgrep, git and ffmpeg.
 
-| Target | Runner |
-|---|---|
-| linux-x64 | `ubuntu-24.04` |
-| linux-arm64 | `ubuntu-24.04-arm` |
-| darwin-arm64 | `macos-15` |
-| darwin-x64 | `macos-15-intel` |
-| win32-x64 | `windows-2025` |
-| win32-arm64 | `windows-11-arm` |
+**Unofficial.** Nous Research does not publish or support these builds. This repo stands in until Hermes ships
+binaries of its own, and steps aside when it does.
 
-The build is Hermes' own: `scripts/bundles/native_build.py` prepares, then assembles the payload, and
-`scripts/smoke-payload.sh` boots it relocated (network off on Linux) — the same steps as Hermes' `pm-bundle.yml`.
-Each target uploads its archive (`.tar.gz`, `.zip` on Windows) and `.sha256` as a workflow artifact.
+## What a release holds
 
-**Proof builds, not a distribution.** Artifacts expire after 90 days and are not signed or published anywhere.
-This repo exists so Nous Research can fork it, or copy `.github/workflows/build.yml` into hermes-agent, and publish
-official binaries themselves.
+A release here carries the tag of the Hermes release it is built from (`v0.23.1` is Hermes `v0.23.1`):
 
-## Run
+- `hermes-cli-<tag>-<target>.tar.gz` (`.zip` on Windows) and its `.sha256`, for `linux-x86_64`,
+  `linux-aarch64`, `darwin-aarch64`, `darwin-x86_64`, `windows-x86_64` and `windows-aarch64`.
+- `binary.json`: the registry entry's `distribution.binary`, with each archive's URL, sha256 and command.
+- A build provenance attestation per archive (`gh attestation verify <archive> --repo solutionsunity/hermes-cli`).
 
-Actions › Build › Run workflow, with a hermes-agent tag (e.g. `v0.22.5`). Each job's summary records the payload
-size, archive size, sha256 and launcher path.
+Extract an archive and run `bin/hermes-acp` for ACP, or `bin/hermes` for the CLI.
 
-Actions › Verify darwin › Run workflow, with a Build run's id, answers whether its unsigned macOS payloads run once
-downloaded: programmatically, with every Mach-O signature checked and each failing library loaded, and quarantined
-the way a browser download leaves them. It stays out of `build.yml`, so that file copies as is.
+## How it is built
+
+The build is Hermes' own: `scripts/bundles/native_build.py` prepares, then assembles the payload on a
+GitHub-hosted runner of each target, and `scripts/smoke-payload.sh` boots it relocated (network off on Linux).
+Two steps are ours:
+
+- [`profile/acp.py`](profile/acp.py) narrows what the payload stages to the ACP profile: the agent core with
+  the `acp` and `mcp` extras, the tools listed above, and no offline dependency cache. Each edit is anchored on
+  the line it replaces, so a Hermes release that moves one fails the build instead of shipping something else.
+- [`check/acp-handshake.mjs`](check/acp-handshake.mjs) launches `hermes-acp` with only the system's own `PATH`,
+  the way a registry client does, and requires it to answer `initialize` with the release's version and a
+  login method.
+
+Actions › Release › Run workflow builds a Hermes tag (its latest release when empty) and publishes it when
+asked.
 
 ## License
 

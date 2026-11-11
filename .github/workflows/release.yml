@@ -1,0 +1,225 @@
+name: Release
+
+# Builds the Hermes CLI in its ACP profile for each registry target from a
+# NousResearch/hermes-agent release tag, checks it, and publishes it as this
+# repo's release of the same tag. Staging is native per target (the runner
+# IS the target), on GitHub-hosted runners only, with Hermes' own build:
+# native_build.py prepares then assembles the payload, smoke-payload.sh
+# boots it relocated. profile/acp.py narrows what it stages.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'NousResearch/hermes-agent tag (empty: its latest release)'
+        required: false
+        type: string
+      publish:
+        description: 'Publish the release (off: build and check only)'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || 'latest' }}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      built: ${{ steps.tag.outputs.built }}
+    steps:
+      - id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT: ${{ inputs.tag }}
+        run: |
+          tag=${INPUT:-$(gh api repos/NousResearch/hermes-agent/releases/latest --jq .tag_name)}
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::not a release tag: $tag"; exit 1; }
+          built=false
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && built=true
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "built=$built" >> "$GITHUB_OUTPUT"
+          echo "Hermes $tag — released here already: $built" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: build ${{ matrix.target.name }}
+    needs: resolve
+    if: needs.resolve.outputs.built == 'false'
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { name: linux-x86_64, runner: ubuntu-24.04 }
+          - { name: linux-aarch64, runner: ubuntu-24.04-arm }
+          - { name: darwin-aarch64, runner: macos-15 }
+          - { name: darwin-x86_64, runner: macos-15-intel }
+          - { name: windows-x86_64, runner: windows-2025 }
+          - { name: windows-aarch64, runner: windows-11-arm }
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+      TARGET: ${{ matrix.target.name }}
+      PYTHONUTF8: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Outside the checkouts: preparation admits only a clean source tree.
+      - name: Place the build roots
+        run: |
+          {
+            echo "PAYLOAD=$RUNNER_TEMP/agent-payload"
+            echo "PAYLOAD_WORK=$RUNNER_TEMP/payload-job"
+            echo "PAYLOAD_CACHE=$RUNNER_TEMP/payload-inputs"
+            if [ "$RUNNER_OS" = Windows ]; then echo "PY=python"; else echo "PY=python3"; fi
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: cli
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NousResearch/hermes-agent
+          ref: ${{ needs.resolve.outputs.tag }}
+          path: hermes-agent
+          persist-credentials: false
+
+      # The bootstrap scripts need Python >= 3.11 (tomllib).
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # Preparation admits only a committed tree, so the profile is committed.
+      - name: Apply the ACP profile
+        working-directory: hermes-agent
+        run: |
+          echo "UPSTREAM=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          "$PY" "$GITHUB_WORKSPACE/cli/profile/acp.py" .
+          git -c user.name=hermes-cli -c user.email=hermes-cli@localhost commit -qam "ACP profile"
+
+      - name: Prepare native payload dependencies
+        working-directory: hermes-agent
+        run: |
+          "$PY" -S -B scripts/bundles/native_build.py --prepare-only \
+            --source "$PWD" --work "$PAYLOAD_WORK" --cache "$PAYLOAD_CACHE" \
+            --out "$PAYLOAD" --ref HEAD
+
+      - name: Assemble the prepared payload without dependency acquisition
+        working-directory: hermes-agent
+        run: '"$PY" -S -B scripts/bundles/native_build.py --prepared "$PAYLOAD.prepared.json"'
+
+      # A standalone payload carries no stamp, so Hermes would report version
+      # 0.0.0. "external": this tree is replaced by its next release, never by
+      # `hermes update`.
+      - name: Stamp the release version
+        working-directory: hermes-agent
+        run: |
+          "$PY" scripts/write_install_stamp.py --output "$PAYLOAD/hermes-agent/install-stamp.json" \
+            --base-version "${TAG#v}" --distance 0 --commit "$UPSTREAM" --branch main \
+            --source ci --update-mechanism external
+
+      - name: Smoke test the relocated payload (network disabled)
+        if: startsWith(matrix.target.name, 'linux-')
+        working-directory: hermes-agent
+        run: sudo --preserve-env=PATH unshare --net bash scripts/smoke-payload.sh "$PAYLOAD"
+
+      - name: Smoke test the relocated payload (native launchers)
+        if: ${{ !startsWith(matrix.target.name, 'linux-') }}
+        working-directory: hermes-agent
+        run: bash scripts/smoke-payload.sh "$PAYLOAD"
+
+      - name: ACP handshake
+        run: node cli/check/acp-handshake.mjs "$PAYLOAD" "${TAG#v}"
+
+      # The payload's contents sit at the archive root, so manifest.json's
+      # relative launcher paths hold from the extraction directory.
+      - name: Archive the payload
+        run: |
+          cmd=$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime"]["commands"]["hermes-acp"])' "$PAYLOAD/manifest.json")
+          mkdir -p dist
+          name="hermes-cli-$TAG-$TARGET"
+          if [ "$RUNNER_OS" = Windows ]; then
+            archive="$name.zip"
+            # bsdtar, not Git Bash's GNU tar: -a picks zip (zip64) from the name.
+            "$SYSTEMROOT/System32/tar.exe" -a -c -f "dist/$archive" -C "$PAYLOAD" .
+          else
+            archive="$name.tar.gz"
+            tar -czf "dist/$archive" -C "$PAYLOAD" .
+          fi
+          cd dist
+          if command -v sha256sum >/dev/null; then sha256sum "$archive"; else shasum -a 256 "$archive"; fi > "$archive.sha256"
+          sha=$(cut -d' ' -f1 "$archive.sha256")
+          "$PY" -c 'import json,sys; json.dump(dict(zip(("target","archive","sha256","cmd"), sys.argv[1:])), open(sys.argv[5], "w"))' \
+            "$TARGET" "$archive" "$sha" "./$cmd" "$TARGET.json"
+          {
+            echo "### $TARGET"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Hermes | \`$TAG\` @ \`$UPSTREAM\` |"
+            echo "| Payload on disk | $(du -sh "$PAYLOAD" | cut -f1) |"
+            echo "| Archive | \`$archive\` — $(du -h "$archive" | cut -f1) ($(wc -c < "$archive" | tr -d ' ') bytes) |"
+            echo "| sha256 | \`$sha\` |"
+            echo "| Command | \`./$cmd\` |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.target.name }}
+          path: dist/
+          # Already compressed; the artifact zip only carries it.
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+
+  release:
+    needs: [resolve, build]
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+
+      # binary.json is the registry entry's `distribution.binary`, read from
+      # what each target built.
+      - name: Publish
+        run: |
+          cd dist
+          python3 - "$GITHUB_REPOSITORY" "$TAG" <<'PY'
+          import glob, json, sys
+          repo, tag = sys.argv[1:]
+          binary = {}
+          for path in sorted(glob.glob("*.json")):
+              t = json.load(open(path))
+              binary[t["target"]] = {
+                  "archive": f"https://github.com/{repo}/releases/download/{tag}/{t['archive']}",
+                  "sha256": t["sha256"],
+                  "cmd": t["cmd"],
+              }
+          json.dump(binary, open("binary.json", "w"), indent=2)
+          PY
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Hermes $TAG" \
+            --notes "Hermes Agent [$TAG](https://github.com/NousResearch/hermes-agent/releases/tag/$TAG), built with Hermes' own payload build, narrowed to what \`hermes acp\` needs, for the ACP registry. Unofficial: Nous Research does not publish or support these builds." \
+            ./*.tar.gz ./*.zip ./*.sha256 binary.json
