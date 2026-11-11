@@ -139,6 +139,20 @@ jobs:
             --base-version "${TAG#v}" --distance 0 --commit "$UPSTREAM" --branch main \
             --source ci --update-mechanism external
 
+      # A standalone payload carries no frontends, so `hermes --tui` would
+      # look for TUI sources to build. Hermes' own compiler builds it on the
+      # payload's own Node and pnpm, into the folder Hermes' launcher reads.
+      - name: Build the TUI into the payload
+        working-directory: hermes-agent
+        run: |
+          for tool in "$PAYLOAD"/tools/node-* "$PAYLOAD"/tools/pnpm-*; do PATH="$tool:$tool/bin:$PATH"; done
+          pnpm install --frozen-lockfile --filter "{./ui-tui}..." --ignore-scripts
+          node scripts/build/tui.mjs --source . --out "$RUNNER_TEMP/tui"
+          tui="$PAYLOAD/hermes-agent/hermes_cli/tui_dist"
+          rm -rf "$tui"
+          cp -R "$RUNNER_TEMP/tui/dist" "$tui"
+          cp "$RUNNER_TEMP/tui/package.json" "$tui/package.json"
+
       - name: Smoke test the relocated payload (network disabled)
         if: startsWith(matrix.target.name, 'linux-')
         working-directory: hermes-agent
@@ -151,6 +165,12 @@ jobs:
 
       - name: ACP handshake
         run: node cli/check/acp-handshake.mjs "$PAYLOAD" "${TAG#v}"
+
+      # Hermes' own lookup must find the bundled TUI.
+      - name: TUI check
+        run: |
+          read -r python site < <("$PY" -c 'import json,sys; r=json.load(open(sys.argv[1]))["runtime"]; print(r["storePython"], r["sitePackages"])' "$PAYLOAD/manifest.json" | tr -d '\r')
+          "$PAYLOAD/$python" -S -c 'import site, sys; site.addsitedir(sys.argv[1]); from hermes_cli.main_tui_launch import _find_bundled_tui; found = _find_bundled_tui(); print("TUI:", found); sys.exit(0 if found else 1)' "$PAYLOAD/$site"
 
       # The payload's contents sit at the archive root, so manifest.json's
       # relative launcher paths hold from the extraction directory.
