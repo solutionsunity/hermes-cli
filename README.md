@@ -12,7 +12,7 @@ binaries of its own, and steps aside when it does.
 
 A release here carries the tag of the Hermes release it is built from (`v0.23.1` is Hermes `v0.23.1`):
 
-- `hermes-cli-<tag>-<target>.tar.gz` (`.zip` on Windows) and its `.sha256`, for `linux-x86_64`,
+- `hermes-cli-<version>-<target>.tar.gz` (`.zip` on Windows) and its `.sha256`, for `linux-x86_64`,
   `linux-aarch64`, `darwin-aarch64`, `darwin-x86_64`, `windows-x86_64` and `windows-aarch64`.
 - `binary.json`: the registry entry's `distribution.binary`, with each archive's URL, sha256 and command.
 - A build provenance attestation per archive (`gh attestation verify <archive> --repo solutionsunity/hermes-cli`).

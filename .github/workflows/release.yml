@@ -158,7 +158,7 @@ jobs:
         run: |
           cmd=$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime"]["commands"]["hermes-acp"])' "$PAYLOAD/manifest.json")
           mkdir -p dist
-          name="hermes-cli-$TAG-$TARGET"
+          name="hermes-cli-${TAG#v}-$TARGET"
           if [ "$RUNNER_OS" = Windows ]; then
             archive="$name.zip"
             # bsdtar, not Git Bash's GNU tar: -a picks zip (zip64) from the name.
