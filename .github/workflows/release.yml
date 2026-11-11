@@ -6,6 +6,11 @@ name: Release
 # IS the target), on GitHub-hosted runners only, with Hermes' own build:
 # native_build.py prepares then assembles the payload, smoke-payload.sh
 # boots it relocated. profile/acp.py narrows what it stages.
+#
+# Every hour it looks for a Hermes release not yet built here, and publishes
+# it once every target passes. A failed build opens one issue for its tag;
+# the hourly run leaves that tag alone while the issue is open, and a manual
+# run retries it.
 
 on:
   workflow_dispatch:
@@ -19,19 +24,22 @@ on:
         required: true
         type: boolean
         default: false
+  schedule:
+    - cron: '23 * * * *'
 
 permissions:
   contents: read
 
+# One run at a time: a run queued behind a build finds its release there.
 concurrency:
-  group: release-${{ inputs.tag || 'latest' }}
+  group: release
 
 jobs:
   resolve:
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
-      built: ${{ steps.tag.outputs.built }}
+      build: ${{ steps.tag.outputs.build }}
     steps:
       - id: tag
         env:
@@ -40,16 +48,21 @@ jobs:
         run: |
           tag=${INPUT:-$(gh api repos/NousResearch/hermes-agent/releases/latest --jq .tag_name)}
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::not a release tag: $tag"; exit 1; }
-          built=false
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && built=true
+          build=true why="not released here yet"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            build=false why="released here already"
+          elif [ "$GITHUB_EVENT_NAME" = schedule ] && [ -n "$(gh issue list --repo "$GITHUB_REPOSITORY" \
+              --state open --search "\"Build failed: Hermes $tag\" in:title" --json number --jq '.[].number')" ]; then
+            build=false why="its build failed; an open issue holds it"
+          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "built=$built" >> "$GITHUB_OUTPUT"
-          echo "Hermes $tag — released here already: $built" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Hermes $tag: $why" | tee -a "$GITHUB_STEP_SUMMARY"
 
   build:
     name: build ${{ matrix.target.name }}
     needs: resolve
-    if: needs.resolve.outputs.built == 'false'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.target.runner }}
     timeout-minutes: 180
     strategy:
@@ -181,12 +194,13 @@ jobs:
 
   release:
     needs: [resolve, build]
-    if: inputs.publish
+    if: github.event_name == 'schedule' || inputs.publish
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       id-token: write
       attestations: write
+      issues: write
     env:
       TAG: ${{ needs.resolve.outputs.tag }}
       GH_TOKEN: ${{ github.token }}
@@ -223,3 +237,31 @@ jobs:
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Hermes $TAG" \
             --notes "Hermes Agent [$TAG](https://github.com/NousResearch/hermes-agent/releases/tag/$TAG), built with Hermes' own payload build, narrowed to what \`hermes acp\` needs, for the ACP registry. Unofficial: Nous Research does not publish or support these builds." \
             ./*.tar.gz ./*.zip ./*.sha256 binary.json
+
+      - name: Close the issue of an earlier failed build
+        run: |
+          for n in $(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"Build failed: Hermes $TAG\" in:title" --json number --jq '.[].number'); do
+            gh issue close "$n" --repo "$GITHUB_REPOSITORY" --comment "Released: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG"
+          done
+
+  report:
+    needs: [resolve, build, release]
+    if: failure() && needs.resolve.outputs.tag != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Open an issue for the failed build
+        run: |
+          title="Build failed: Hermes $TAG"
+          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[].number')
+          run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body "Failed again: $run"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --body "The release build of Hermes $TAG failed: $run. The hourly run leaves $TAG alone while this issue is open; a manual run of Release retries it."
+          fi

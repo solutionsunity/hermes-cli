@@ -32,8 +32,10 @@ Two steps are ours:
   the way a registry client does. It requires `initialize` to answer with the release's version and a login
   method, and `session/new` to open a session once a model is chosen (no key is set, nothing reaches a provider).
 
-Actions › Release › Run workflow builds a Hermes tag (its latest release when empty) and publishes it when
-asked.
+Every hour, the Release workflow looks for a Hermes release not yet built here and publishes it once every
+target passes. A failed build opens one issue for its tag, and the hourly run leaves that tag alone while the
+issue is open. Actions › Release › Run workflow builds a tag by hand (its latest release when empty), and
+publishes it when asked.
 
 ## License
 
