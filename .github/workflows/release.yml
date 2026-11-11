@@ -235,7 +235,7 @@ jobs:
           json.dump(binary, open("binary.json", "w"), indent=2)
           PY
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Hermes $TAG" \
-            --notes "Hermes Agent [$TAG](https://github.com/NousResearch/hermes-agent/releases/tag/$TAG), built with Hermes' own payload build, narrowed to what \`hermes acp\` needs, for the ACP registry. Unofficial: Nous Research does not publish or support these builds." \
+            --notes "Community build of Hermes Agent [$TAG](https://github.com/NousResearch/hermes-agent/releases/tag/$TAG), made from Hermes' own payload build and narrowed to what \`hermes acp\` needs, for the ACP registry. Solutions Unity maintains it until Nous Research publishes binaries of its own." \
             ./*.tar.gz ./*.zip ./*.sha256 binary.json
 
       - name: Close the issue of an earlier failed build

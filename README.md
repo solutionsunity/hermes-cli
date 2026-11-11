@@ -5,8 +5,8 @@ one per [ACP registry](https://github.com/agentclientprotocol/registry) target, 
 Nothing needs to be installed first: each archive carries its own Python, uv, Node, npm, pnpm, ripgrep and
 ffmpeg. git is bundled on Windows; on Linux and macOS Hermes uses the system's git, by its own choice.
 
-**Unofficial.** Nous Research does not publish or support these builds. This repo stands in until Hermes ships
-binaries of its own, and steps aside when it does.
+**Community build.** Solutions Unity builds and maintains these from each Hermes release, until Nous Research
+publishes binaries of its own; then this repo steps aside.
 
 ## What a release holds
 
