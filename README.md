@@ -29,8 +29,8 @@ Two steps are ours:
   the `acp` and `mcp` extras, the tools listed above, and no offline dependency cache. Each edit is anchored on
   the line it replaces, so a Hermes release that moves one fails the build instead of shipping something else.
 - [`check/acp-handshake.mjs`](check/acp-handshake.mjs) launches `hermes-acp` with only the system's own `PATH`,
-  the way a registry client does, and requires it to answer `initialize` with the release's version and a
-  login method.
+  the way a registry client does. It requires `initialize` to answer with the release's version and a login
+  method, and `session/new` to open a session once a model is chosen (no key is set, nothing reaches a provider).
 
 Actions › Release › Run workflow builds a Hermes tag (its latest release when empty) and publishes it when
 asked.

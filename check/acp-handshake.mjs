@@ -1,10 +1,11 @@
 // Speaks ACP to an extracted payload's hermes-acp over stdio, the way a
 // registry client launches it: initialize, then session/new on a fresh home.
 // Fails unless initialize answers with the expected agent version and a
-// login method; session/new is printed, since a home with no provider
-// configured has nothing to open a session with.
+// login method, and session/new opens a session once a model is chosen (on a
+// home with none, Hermes refuses it as storage_unavailable). No key is set:
+// opening a session sends nothing to the provider.
 // Usage: node acp-handshake.mjs <payload-dir> <version>
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -20,6 +21,11 @@ const system = process.platform === 'win32'
 const env = { PATH: system, HOME: home, USERPROFILE: home, HERMES_HOME: join(home, '.hermes') }
 for (const [key, value] of Object.entries(process.env)) {
   if (/^(systemroot|windir|comspec|pathext|temp|tmp)$/i.test(key)) env[key] = value
+}
+const hermes = resolve(payload, manifest.runtime.commands.hermes)
+for (const [key, value] of [['model.provider', 'openrouter'], ['model.default', 'anthropic/claude-sonnet-4']]) {
+  const set = spawnSync(hermes, ['config', 'set', key, value], { cwd: home, env, stdio: 'inherit' })
+  if (set.status !== 0) throw new Error(`hermes config set ${key} failed: ${set.status ?? set.error}`)
 }
 const agent = spawn(resolve(payload, manifest.runtime.commands['hermes-acp']), [], {
   cwd: home, env, stdio: ['pipe', 'pipe', 'inherit'],
@@ -59,6 +65,7 @@ try {
   if (!(init.result.authMethods?.length > 0)) throw new Error('no login method declared')
   const session = await request('session/new', { cwd: home, mcpServers: [] })
   console.log(`session/new: ${JSON.stringify(session.result ?? session.error).slice(0, 600)}`)
+  if (!session.result?.sessionId) throw new Error('session/new opened no session')
 } catch (error) {
   console.log(`handshake: ${error.message}`)
   process.exitCode = 1
