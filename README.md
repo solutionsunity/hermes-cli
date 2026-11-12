@@ -6,7 +6,7 @@ Nothing needs to be installed first: each archive carries its own Python, uv, No
 ffmpeg. git is bundled on Windows; on Linux and macOS Hermes uses the system's git, by its own choice.
 
 **Community build.** Solutions Unity builds and maintains these from each Hermes release, until Nous Research
-publishes binaries of its own; then this repo steps aside.
+publishes binaries of its own; then this repo steps aside ([#2](https://github.com/solutionsunity/hermes-cli/issues/2)).
 
 ## What a release holds
 
